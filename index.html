@@ -1,15 +1,28 @@
 <!DOCTYPE html>
-<html>
+<html lang="uz">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WebXR AR (ARCore)</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: sans-serif; }
+    #overlay { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+    #status { position: absolute; top: 10px; left: 10px; right: 10px; color: #fff;
+              font-size: 15px; background: rgba(0,0,0,.75); padding: 10px; border-radius: 8px; }
+    #go { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+          pointer-events: auto; padding: 14px 22px; font-size: 18px; border: 0;
+          border-radius: 10px; background: #2196F3; color: #fff; }
+    #hint { position: absolute; bottom: 24px; left: 10px; right: 10px; text-align: center;
+            color: #fff; background: rgba(0,0,0,.6); padding: 8px; border-radius: 8px;
+            font-size: 15px; display: none; }
+  </style>
 </head>
 <body>
   <a-scene
-    webxr="optionalFeatures: hit-test, local-floor, dom-overlay; overlayElement: #overlay"
+    vr-mode-ui="enabled: false"
     renderer="alpha: true"
+    webxr="optionalFeatures: hit-test, dom-overlay; overlayElement: #overlay"
     ar-hit-test>
 
     <a-entity id="reticle" visible="false">
@@ -22,47 +35,99 @@
     <a-entity camera></a-entity>
   </a-scene>
 
-  <div id="overlay" style="position:fixed;top:10px;left:10px;color:#fff;font:16px sans-serif;
-       background:rgba(0,0,0,.6);padding:8px 12px;border-radius:8px;">
-    "AR" tugmasini bosing, polga qarating, ekranga bosing
+  <div id="overlay">
+    <div id="status"></div>
+    <button id="go">AR ni boshlash</button>
+    <div id="hint">Polga qarating, yashil halqa chiqqach ekranga bosing</div>
   </div>
 
   <script>
-    AFRAME.registerComponent('ar-hit-test', {
-      init: function () {
-        var self = this, scene = this.el, reticle = document.getElementById('reticle');
-        this.hitSource = null; this.lastPose = null;
+    var st = document.getElementById('status');
+    function log(t) { st.innerHTML += t + '<br>'; }
 
-        scene.addEventListener('enter-vr', function () {
-          if (!scene.is('ar-mode')) return;
-          var session = scene.renderer.xr.getSession();
-          session.requestReferenceSpace('viewer').then(function (viewerSpace) {
-            session.requestHitTestSource({ space: viewerSpace }).then(function (src) {
-              self.hitSource = src;
+    // 1) Diagnostika
+    log(typeof AFRAME !== 'undefined'
+      ? '✅ A-Frame yuklandi'
+      : '❌ A-Frame yuklanmadi (tarmoq bloklagan bo\'lishi mumkin)');
+
+    if (navigator.xr) {
+      navigator.xr.isSessionSupported('immersive-ar').then(function (ok) {
+        log(ok ? '✅ WebXR AR qo\'llab-quvvatlanadi'
+               : '❌ WebXR AR yo\'q (ARCore yoki Chrome yangilanishini tekshiring)');
+      }).catch(function (e) { log('❌ Xato: ' + e.name); });
+    } else {
+      log('❌ navigator.xr yo\'q (iPhone yoki eski brauzer)');
+    }
+
+    // 2) Hit-test komponenti
+    if (typeof AFRAME !== 'undefined') {
+      AFRAME.registerComponent('ar-hit-test', {
+        init: function () {
+          var self = this, scene = this.el;
+          this.hitSource = null;
+          this.lastPose = null;
+
+          scene.addEventListener('enter-vr', function () {
+            if (!scene.is('ar-mode')) return;
+            document.getElementById('go').style.display = 'none';
+            document.getElementById('status').style.display = 'none';
+            document.getElementById('hint').style.display = 'block';
+
+            var session = scene.renderer.xr.getSession();
+            session.requestReferenceSpace('viewer').then(function (viewerSpace) {
+              return session.requestHitTestSource({ space: viewerSpace });
+            }).then(function (src) { self.hitSource = src; })
+              .catch(function (e) { alert('Hit-test xatosi: ' + e.message); });
+
+            session.addEventListener('select', function () {
+              if (!self.lastPose) return;
+              var p = self.lastPose.transform.position;
+              var box = document.createElement('a-box');
+              box.setAttribute('position', p.x + ' ' + (p.y + 0.1) + ' ' + p.z);
+              box.setAttribute('width', 0.2);
+              box.setAttribute('height', 0.2);
+              box.setAttribute('depth', 0.2);
+              box.setAttribute('color', '#2196F3');
+              document.getElementById('objects').appendChild(box);
             });
           });
-          session.addEventListener('select', function () {
-            if (!self.lastPose) return;
-            var p = self.lastPose.transform.position;
-            var box = document.createElement('a-box');
-            box.setAttribute('position', p.x + ' ' + (p.y + 0.1) + ' ' + p.z);
-            box.setAttribute('width', 0.2); box.setAttribute('height', 0.2); box.setAttribute('depth', 0.2);
-            box.setAttribute('color', '#2196F3');
-            document.getElementById('objects').appendChild(box);
+
+          scene.addEventListener('exit-vr', function () {
+            self.hitSource = null;
+            self.lastPose = null;
+            document.getElementById('reticle').setAttribute('visible', false);
+            document.getElementById('go').style.display = 'block';
+            document.getElementById('status').style.display = 'block';
+            document.getElementById('hint').style.display = 'none';
           });
-        });
-      },
-      tick: function () {
-        var scene = this.el, reticle = document.getElementById('reticle');
-        if (!this.hitSource || !scene.frame) return;
-        var refSpace = scene.renderer.xr.getReferenceSpace();
-        var hits = scene.frame.getHitTestResults(this.hitSource);
-        if (hits.length) {
-          var pose = hits[0].getPose(refSpace);
-          this.lastPose = pose;
-          reticle.setAttribute('visible', true);
-          reticle.object3D.position.copy(pose.transform.position);
-        } else { reticle.setAttribute('visible', false); }
+        },
+
+        tick: function () {
+          var scene = this.el;
+          if (!this.hitSource || !scene.frame) return;
+          var reticle = document.getElementById('reticle');
+          var refSpace = scene.renderer.xr.getReferenceSpace();
+          var hits = scene.frame.getHitTestResults(this.hitSource);
+          if (hits.length) {
+            var pose = hits[0].getPose(refSpace);
+            this.lastPose = pose;
+            reticle.setAttribute('visible', true);
+            var p = pose.transform.position;
+            reticle.object3D.position.set(p.x, p.y, p.z);
+          } else {
+            this.lastPose = null;
+            reticle.setAttribute('visible', false);
+          }
+        }
+      });
+    }
+
+    // 3) AR tugmasi
+    document.getElementById('go').addEventListener('click', function () {
+      try {
+        document.querySelector('a-scene').enterAR();
+      } catch (e) {
+        alert('AR xatosi: ' + e.message);
       }
     });
   </script>
